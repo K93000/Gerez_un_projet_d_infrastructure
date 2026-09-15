@@ -1,0 +1,67 @@
+id: sport_data_pipeline
+namespace: dev.sds
+
+description: Orchestration industrielle du pipeline Sport Data Solution (P12)
+
+inputs:
+  - id: prime_rate
+    type: FLOAT
+    defaults: 0.05
+    displayName: Taux de prime
+    description: "Saisissez le taux de la prime sportive (ex: 0.05 pour 5%, 0.07 pour 7%)"
+
+tasks:
+
+  # Étape 1 : Contrôle qualité des données avec Soda Core
+  - id: run_data_quality
+    type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: python:3.10-slim
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      networkMode: "p12_default"
+      pullPolicy: IF_NOT_PRESENT
+    namespaceFiles:
+      enabled: true
+    env:
+      PIP_ROOT_USER_ACTION: ignore
+      PYTHONUNBUFFERED: "1"
+      DEBIAN_FRONTEND: noninteractive
+    commands:
+      - python -m pip install --default-timeout=180 --retries 10 --quiet --disable-pip-version-check "markupsafe<3.0.0" "soda-core-postgres~=3.0.45"
+      - soda scan -d sport_data_db -c configuration.yml checks.yml
+
+  # Étape 2 : Recalcul métier des primes et jours bien-être
+  - id: calculate_benefits
+    type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: python:3.10-slim
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      networkMode: "p12_default"
+      pullPolicy: IF_NOT_PRESENT
+    namespaceFiles:
+      enabled: true
+    env:
+      PIP_ROOT_USER_ACTION: ignore
+      PYTHONUNBUFFERED: "1"
+      DEBIAN_FRONTEND: noninteractive
+      PYTHONPATH: "."
+      RH_FILE_PATH: "Donnees_RH.xlsx"
+      SPORT_FILE_PATH: "Donnees_Sportive.xlsx"
+      OVERRIDE_PRIME_RATE: "{{ inputs.prime_rate }}"
+    commands:
+      - python -m pip install --default-timeout=180 --retries 10 --quiet --disable-pip-version-check psycopg2-binary pandas openpyxl requests sqlalchemy
+      - python calculate_benefits.py
+
+  # Étape 3 : Notification Slack dynamique
+  - id: notify_slack_success
+    type: io.kestra.plugin.notifications.slack.SlackIncomingWebhook
+    url: "{{ secret('SLACK_WEBHOOK_URL') }}"
+    payload: |
+      {
+        "text": "Bravo {{ outputs.calculate_benefits.vars.last_athlete }} ! Tu viens de réaliser {{ outputs.calculate_benefits.vars.last_distance }} km de {{ outputs.calculate_benefits.vars.last_sport }} en {{ outputs.calculate_benefits.vars.last_duration }} min ! Quelle énergie ! (\"Course démo soutenance live !\")"
+      }
+
+triggers:
+  - id: hourly_schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 * * * *"

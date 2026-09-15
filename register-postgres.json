@@ -1,0 +1,17 @@
+{
+  "name": "sds-postgres-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "tasks.max": "1",
+    "database.hostname": "postgres",
+    "database.port": "5432",
+    "database.user": "sds_user",
+    "database.password": "sds_password",
+    "database.dbname": "sport_data_db",
+    "database.server.name": "sds",
+    "topic.prefix": "sds",
+    "table.include.list": "public.strava_activities",
+    "plugin.name": "pgoutput",
+    "snapshot.mode": "never"
+  }
+}

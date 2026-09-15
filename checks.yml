@@ -1,0 +1,24 @@
+checks for strava_activities:
+  # Chaque activité doit avoir un salarié
+  - missing_count(employee_id) = 0
+
+  # La distance doit être positive
+  - min(distance_m) > 0
+
+  # Le sport doit être renseigné
+  - missing_count(sport_type) = 0
+
+  # La durée doit être strictement positive
+  - min(elapsed_time_s) > 0
+
+  # Cohérence temporelle : la fin d'une activité doit être après son début
+  - failed rows:
+      name: Incohérence temporelle (fin avant début)
+      fail condition: end_date < start_date
+
+  # Intégrité référentielle : le salarié doit exister côté RH
+  - values in (employee_id) must exist in employees (employee_id)
+
+checks for employees:
+  # Chaque salarié doit avoir un ID unique
+  - duplicate_count(employee_id) = 0

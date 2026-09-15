@@ -1,0 +1,154 @@
+services:
+  # --- Base de données PostgreSQL ---
+  postgres:
+    image: postgres:15-alpine
+    container_name: sds_postgres
+    restart: unless-stopped
+    command: ["postgres", "-c", "wal_level=logical"]
+    environment:
+      POSTGRES_DB: sport_data_db
+      POSTGRES_USER: sds_user
+      POSTGRES_PASSWORD: sds_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - p12_default
+
+  # --- Redpanda (Kafka) ---
+  redpanda:
+    image: redpandadata/redpanda:v23.2.1
+    container_name: sds_redpanda
+    restart: unless-stopped
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp
+      - "1"
+      - --memory
+      - 1G
+      - --reserve-memory
+      - 0M
+      - --node-id
+      - "0"
+      - --check=false
+      - --kafka-addr
+      - internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr
+      - internal://redpanda:9092,external://localhost:19092
+    ports:
+      - "9092:9092"
+      - "19092:19092"
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    networks:
+      - p12_default
+
+  # --- Debezium (CDC) ---
+  debezium:
+    image: debezium/connect:2.3
+    container_name: sds_debezium
+    restart: unless-stopped
+    depends_on:
+      - redpanda
+      - postgres
+    environment:
+      BOOTSTRAP_SERVERS: redpanda:9092
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: debezium_configs
+      OFFSET_STORAGE_TOPIC: debezium_offsets
+      STATUS_STORAGE_TOPIC: debezium_status
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      REST_ADVERTISED_HOST_NAME: debezium
+      PLUGIN_PATH: /kafka/connect
+    ports:
+      - "8083:8083"
+    networks:
+      - p12_default
+
+  # --- Orchestrateur Kestra ---
+  kestra:
+    image: kestra/kestra:latest
+    container_name: sds_kestra
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    user: root
+    command: ["server", "standalone"]
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    environment:
+      KESTRA_CONFIGURATION: |
+        kestra:
+          secret:
+            type: ENVIRONMENT
+          repository:
+            type: postgres
+          queue:
+            type: postgres
+          storage:
+            type: local
+            local:
+              base-path: /app/storage
+          server:
+            basic-auth:
+              enabled: false
+
+        datasources:
+          postgres:
+            url: jdbc:postgresql://postgres:5432/sport_data_db
+            driverClassName: org.postgresql.Driver
+            username: sds_user
+            password: sds_password
+
+        logger:
+          levels:
+            io.kestra: INFO
+
+      SECRET_SLACK_WEBHOOK_URL: "${SECRET_SLACK_WEBHOOK_URL}"
+
+    volumes:
+      - kestra_data:/app/storage
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/kestra-wd:/tmp/kestra-wd
+      - ./:/project
+
+    networks:
+      - p12_default
+
+  # --- Notificateur Slack temps réel (écoute Kafka/Debezium) ---
+  slack_notifier:
+    build:
+      context: .
+      dockerfile: slack_notifier_service/Dockerfile
+    container_name: sds_slack_notifier
+    restart: unless-stopped
+    depends_on:
+      - redpanda
+      - postgres
+    environment:
+      DB_HOST: postgres
+      POSTGRES_DB: sport_data_db
+      POSTGRES_USER: sds_user
+      POSTGRES_PASSWORD: sds_password
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      SLACK_WEBHOOK_URL: "${SLACK_WEBHOOK_URL}"
+    networks:
+      - p12_default
+
+# --- Volumes et Réseaux ---
+networks:
+  p12_default:
+    name: p12_default
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redpanda_data:
+  kestra_data:

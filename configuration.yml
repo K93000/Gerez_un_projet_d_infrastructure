@@ -1,0 +1,8 @@
+data_source sport_data_db:
+  type: postgres
+  host: postgres
+  port: 5432
+  username: sds_user
+  password: sds_password
+  database: sport_data_db
+  schema: public
